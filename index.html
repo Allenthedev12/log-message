@@ -1,0 +1,256 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SSE Test Client - Message Table</title>
+    <!-- Bootstrap CSS for Styling -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- DataTables CSS for Enhanced Table Features -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        #status {
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        /* Indicate clickable rows with pointer cursor */
+        #messagesTable tbody tr {
+            cursor: pointer;
+        }
+        /* Highlight rows on hover for better UX */
+        #messagesTable tbody tr:hover {
+            background-color: #f1f1f1;
+        }
+        /* Optional: Highlight unread messages */
+        .table-warning {
+            background-color: #fff3cd !important;
+        }
+    </style>
+</head>
+<body>
+    <h1>SSE Test Client - Live Messages</h1>
+    <div id="status">Loading messages...</div>
+    <table id="messagesTable" class="table table-striped table-bordered">
+        <thead>
+            <tr>
+                <th>Chat ID</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Body</th>
+                <th>Is Read</th>
+                <th>Created At</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Messages will be dynamically appended here -->
+        </tbody>
+    </table>
+
+    <!-- jQuery (Required for DataTables) -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- DataTables JS for Enhanced Table Features -->
+    <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+
+    <script>
+        // Initialize DataTable with default sorting on 'Created At' column descending
+        let dataTable = null;
+        $(document).ready(function() {
+            dataTable = $('#messagesTable').DataTable({
+                "order": [[ 5, "desc" ]], // Corrected: 'Created At' is now at index 5
+                "columnDefs": [
+                    { "type": "date", "targets": [5] } // Corrected: Apply date sorting to index 5
+                ]
+            });
+
+            // Event delegation for row clicks
+            $('#messagesTable tbody').on('click', 'tr', function () {
+                const chatId = $(this).data('chat-id');
+                if (chatId) {
+                    downloadCSV(chatId);
+                } else {
+                    console.error('Chat ID not found for this row.');
+                    alert('Chat ID not available for this message.');
+                }
+            });
+
+            // Fetch initial 100 messages
+            fetchInitialMessages();
+        });
+
+        // Initialize EventSource to connect to SSE endpoint
+        const eventSource = new EventSource('https://api.pureworker.com/api/events');
+
+        // Handle successful SSE connection
+        eventSource.onopen = () => {
+            console.log('SSE connection established.');
+            document.getElementById('status').textContent = 'Connected to SSE.';
+        };
+
+        // Handle incoming SSE messages
+        eventSource.onmessage = (event) => {
+            console.log('Received:', event.data);
+            const message = JSON.parse(event.data);
+            appendMessageToTable(message);
+        };
+
+        // Handle SSE errors
+        eventSource.onerror = (error) => {
+            console.error('SSE error:', error);
+            document.getElementById('status').textContent = 'SSE connection error.';
+            eventSource.close();
+        };
+
+        /**
+         * Fetches the initial 100 messages from the server and populates the table.
+         */
+        function fetchInitialMessages() {
+            const url = 'https://api.pureworker.com/api/admin/customers/messages/log'; // Replace with your actual endpoint
+
+            fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch messages. Status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Check if 'messages' array exists
+                if (data.messages && Array.isArray(data.messages)) {
+                    data.messages.forEach(message => {
+                        appendMessageToTable(message);
+                    });
+                    document.getElementById('status').textContent = 'Loaded 100 messages.';
+                } else if (Array.isArray(data)) { // Handle direct array response
+                    data.forEach(message => {
+                        appendMessageToTable(message);
+                    });
+                    document.getElementById('status').textContent = 'Loaded 100 messages.';
+                } else {
+                    throw new Error('Invalid data format received from the server.');
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching initial messages:', error);
+                document.getElementById('status').textContent = 'Error loading messages.';
+                alert('Failed to load initial messages. Please try again.');
+            });
+        }
+
+        /**
+         * Appends a message object as a new row in the messages table.
+         * Utilizes DataTables API for dynamic updates.
+         * @param {Object} message - The message object received from SSE or initial fetch.
+         */
+        function appendMessageToTable(message) {
+            const formattedFrom = formatUser(message.from);
+            const formattedTo = formatUser(message.to);
+            const formattedCreatedAt = formatDate(message.createdAt);
+
+            // Add row to DataTable and retrieve the row node
+            const rowNode = dataTable.row.add([
+                message.chat || 'N/A',            // Chat ID
+                formattedFrom,                    // From
+                formattedTo,                      // To
+                message.body || 'N/A',            // Body
+                message.isRead ? 'Yes' : 'No',    // Is Read
+                formattedCreatedAt,               // Created At
+            ]).draw(false).node();
+
+            // Set data-chat-id attribute on the row for later retrieval
+            $(rowNode).attr('data-chat-id', message.chat || '');
+
+            // Optionally, apply conditional formatting (e.g., highlight unread messages)
+            if (!message.isRead) {
+                $(rowNode).addClass('table-warning'); // Bootstrap's warning class for highlighting
+            }
+        }
+
+        /**
+         * Formats the user object to display full name or email.
+         * @param {Object} user - The user object containing firstName, lastName, and email.
+         * @returns {string} - Formatted user string.
+         */
+        function formatUser(user) {
+            if (!user) return 'N/A';
+            const firstName = user.firstName || '';
+            const lastName = user.lastName || '';
+            const businessName = user.businessName || '';
+            const fullName = `${firstName} ${lastName} ${businessName}`.trim();
+            return fullName || user.email || 'N/A';
+        }
+
+        /**
+         * Formats ISO date strings to a more readable format.
+         * @param {string} dateString - The ISO date string.
+         * @returns {string} - Formatted date string.
+         */
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            const options = { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric', 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit' 
+            };
+            return new Date(dateString).toLocaleString(undefined, options);
+        }
+
+        /**
+         * Initiates a CSV file download based on the provided chatId.
+         * @param {string} chatId - The ID of the chat for which to download the CSV.
+         */
+        function downloadCSV(chatId) {
+            // Construct the endpoint URL with chatId as a path parameter
+            const url = `https://api.pureworker.com/api/admin/customers/messages/${encodeURIComponent(chatId)}`;
+            
+            // Use Fetch API to GET the CSV file
+            fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'text/csv',
+                },
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Network response was not ok. Status: ${response.status}`);
+                }
+                return response.blob(); // Parse response as Blob
+            })
+            .then(blob => {
+                // Create a temporary URL for the blob
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+
+                // Set the desired file name for the download
+                a.download = `chat_${chatId}.csv`;
+
+                // Append the link to the document and trigger a click to start download
+                document.body.appendChild(a);
+                a.click();
+
+                // Clean up by removing the link and revoking the object URL
+                a.remove();
+                window.URL.revokeObjectURL(downloadUrl);
+            })
+            .catch(error => {
+                console.error('Error downloading the CSV:', error);
+                alert('Failed to download CSV. Please try again.');
+            });
+        }
+    </script>
+</body>
+</html>
